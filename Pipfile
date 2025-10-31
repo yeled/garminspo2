@@ -5,9 +5,12 @@ name = "pypi"
 
 [packages]
 garminconnect = "*"
+garth = "*"
+requests = "*"
+intervals = "*"
 intervalsicu = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.9"
+python_version = "3.12"
