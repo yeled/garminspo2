@@ -8,18 +8,15 @@ from time import sleep
 import logging
 import os
 import sys
-from getpass import getpass
 from pathlib import Path
 
 from intervalsicu import Intervals
 
-import requests
-from garth.exc import GarthException, GarthHTTPError
-from garminconnect import (
-    Garmin,
-    GarminConnectAuthenticationError,
-    GarminConnectConnectionError,
-    GarminConnectTooManyRequestsError,
+from garmin_client import (
+    GarminClient,
+    GarminAuthenticationError,
+    GarminConnectionError,
+    GarminTooManyRequestsError,
 )
 from auth import EMAIL, PASSWORD, DAYS_TO_FETCH, ATHELETE_ID, API_KEY
 
@@ -29,80 +26,31 @@ print(startfrom)
 
 def safe_api_call(api_method, *args, **kwargs):
     """
-    Safe API call wrapper with comprehensive error handling.
-
-    This demonstrates the error handling patterns used throughout the library.
-    Returns (success: bool, result: Any, error_message: str)
+    Safe API call wrapper. Returns (success: bool, result: Any, error_message: str).
     """
     try:
         result = api_method(*args, **kwargs)
         return True, result, None
 
-    except GarthHTTPError as e:
-        # Handle specific HTTP errors gracefully
+    except GarminTooManyRequestsError as e:
+        return False, None, f"Rate limit exceeded (429) - Please wait before making more requests: {e}"
+
+    except GarminAuthenticationError as e:
+        return False, None, f"Authentication required - Please re-authenticate: {e}"
+
+    except GarminConnectionError as e:
         error_str = str(e)
-        status_code = getattr(getattr(e, "response", None), "status_code", None)
-
-        if status_code == 400 or "400" in error_str:
-            return (
-                False,
-                None,
-                "Endpoint not available (400 Bad Request) - Feature may not be enabled for your account",
-            )
-        elif status_code == 401 or "401" in error_str:
-            return (
-                False,
-                None,
-                "Authentication required (401 Unauthorized) - Please re-authenticate",
-            )
-        elif status_code == 403 or "403" in error_str:
-            return (
-                False,
-                None,
-                "Access denied (403 Forbidden) - Account may not have permission",
-            )
-        elif status_code == 404 or "404" in error_str:
-            return (
-                False,
-                None,
-                "Endpoint not found (404) - Feature may have been moved or removed",
-            )
-        elif status_code == 429 or "429" in error_str:
-            return (
-                False,
-                None,
-                "Rate limit exceeded (429) - Please wait before making more requests",
-            )
-        elif status_code == 500 or "500" in error_str:
-            return (
-                False,
-                None,
-                "Server error (500) - Garmin's servers are experiencing issues",
-            )
-        elif status_code == 503 or "503" in error_str:
-            return (
-                False,
-                None,
-                "Service unavailable (503) - Garmin's servers are temporarily unavailable",
-            )
-        else:
-            return False, None, f"HTTP error: {e}"
-
-    except FileNotFoundError:
-        return (
-            False,
-            None,
-            "No valid tokens found. Please login with your email/password to create new tokens.",
-        )
-
-    except GarminConnectAuthenticationError as e:
-        return False, None, f"Authentication issue: {e}"
-
-    except GarminConnectConnectionError as e:
-        return False, None, f"Connection issue: {e}"
-
-    except GarminConnectTooManyRequestsError as e:
-        return False, None, f"Rate limit exceeded: {e}"
+        if "400" in error_str:
+            return False, None, "Endpoint not available (400) - Feature may not be enabled for your account"
+        elif "403" in error_str:
+            return False, None, "Access denied (403) - Account may not have permission"
+        elif "404" in error_str:
+            return False, None, "Endpoint not found (404) - Feature may have been moved or removed"
+        elif "500" in error_str:
+            return False, None, "Server error (500) - Garmin's servers are experiencing issues"
+        elif "503" in error_str:
+            return False, None, "Service unavailable (503) - Garmin's servers are temporarily unavailable"
+        return False, None, f"Connection error: {e}"
 
     except Exception as e:
         return False, None, f"Unexpected error: {e}"
@@ -122,107 +70,56 @@ def get_credentials():
     return email, password
 
 
-def init_api() -> Garmin | None:
+def init_api() -> GarminClient | None:
     """Initialize Garmin API with authentication and token management."""
 
-    # Configure token storage
-    tokenstore = os.getenv("GARMINTOKENS", "~/.garminconnect")
-    tokenstore_path = Path(tokenstore).expanduser()
+    tokenstore = Path(os.getenv("GARMINTOKENS", "~/.garminconnect")).expanduser()
 
-    # print(f"Token storage: {tokenstore_path}")
-
-    # Check if token files exist
-    if tokenstore_path.exists():
-        # print("Found existing token directory")
-        token_files = list(tokenstore_path.glob("*.json"))
-        if token_files:
-            print(
-                f"Found {len(token_files)} token file(s): {[f.name for f in token_files]}"
-            )
-        else:
-            print("Token directory exists but no token files found")
-    else:
-        print("No existing token directory found")
-
-    # First try to login with stored tokens
+    # Try loading existing tokens
     try:
-        # print("Attempting to use saved authentication tokens...")
-        garmin = Garmin()
-        garmin.login(str(tokenstore_path))
-        # print("Successfully logged in using saved tokens!")
-        return garmin
-
-    except (
-        FileNotFoundError,
-        GarthHTTPError,
-        GarminConnectAuthenticationError,
-        GarminConnectConnectionError,
-    ):
+        client = GarminClient.from_tokens(tokenstore)
+        print("Loaded saved authentication tokens.")
+        return client
+    except (GarminAuthenticationError, GarminConnectionError):
         print("No valid tokens found. Requesting fresh login credentials.")
 
-    # Loop for credential entry with retry on auth failure
+    # Fresh login
+    email, password = get_credentials()
+    client = GarminClient()
+
     while True:
         try:
-            # Get credentials
-            email, password = get_credentials()
-
             print("Logging in with credentials...")
-            garmin = Garmin(
-                email=email, password=password, is_cn=False
-            )
-            result1, result2 = garmin.login()
+            result1, result2 = client.login(email, password, return_on_mfa=True)
 
             if result1 == "needs_mfa":
                 print("Multi-factor authentication required")
-
                 mfa_code = input("Please enter your MFA code: ")
                 print("Submitting MFA code...")
-
                 try:
-                    garmin.resume_login(result2, mfa_code)
+                    client.resume_login(result2, mfa_code)
                     print("MFA authentication successful!")
-
-                except GarthHTTPError as garth_error:
-                    # Handle specific HTTP errors from MFA
-                    error_str = str(garth_error)
-                    if "429" in error_str and "Too Many Requests" in error_str:
-                        print("Too many MFA attempts")
-                        print(" Please wait 30 minutes before trying again")
-                        sys.exit(1)
-                    elif "401" in error_str or "403" in error_str:
-                        print("Invalid MFA code")
-                        print(" Please verify your MFA code and try again")
-                        continue
-                    else:
-                        # Other HTTP errors - don't retry
-                        print(f"MFA authentication failed: {garth_error}")
-                        sys.exit(1)
-
-                except GarthException as garth_error:
-                    print(f"MFA authentication failed: {garth_error}")
-                    print("Please verify your MFA code and try again")
+                except GarminTooManyRequestsError:
+                    print("Too many MFA attempts. Please wait 30 minutes before trying again.")
+                    sys.exit(1)
+                except GarminAuthenticationError:
+                    print("Invalid MFA code. Please verify your MFA code and try again.")
                     continue
 
-            # Save tokens for future use
-            garmin.garth.dump(str(tokenstore_path))
-            print(f"Authentication tokens saved to: {tokenstore_path}")
-            # print("Login successful!")
-            return garmin
+            client.dump(tokenstore)
+            print(f"Authentication tokens saved to: {tokenstore}")
+            return client
 
-        except GarminConnectAuthenticationError:
-            print("Authentication failed:")
-            # print("Please check your username and password and try again")
-            # Continue the loop to retry
+        except GarminAuthenticationError:
+            print("Authentication failed. Please check your credentials and try again.")
             continue
 
-        except (
-            FileNotFoundError,
-            GarthHTTPError,
-            GarminConnectConnectionError,
-            requests.exceptions.HTTPError,
-        ) as err:
+        except GarminTooManyRequestsError:
+            print("Too many login attempts. Please wait 30 minutes before trying again.")
+            sys.exit(1)
+
+        except GarminConnectionError as err:
             print(f"Connection error: {err}")
-            # print("Please check your internet connection and try again")
             return None
 
         except KeyboardInterrupt:
@@ -230,10 +127,14 @@ def init_api() -> Garmin | None:
             return None
 
 
-def display_spo2(api: Garmin):
+def _get_spo2_data(client: GarminClient, cdate: str) -> dict:
+    return client._connectapi(f"/wellness-service/wellness/dailySummary/spo2/{cdate}")
+
+
+def display_spo2(api: GarminClient):
     """Display today's activity statistics with proper error handling."""
 
-    success, summary, error_msg = safe_api_call(api.get_spo2_data, today.isoformat())
+    success, summary, error_msg = safe_api_call(_get_spo2_data, api, today.isoformat())
     if success and summary:
         spo2_avgsleep = summary.get("avgSleepSpO2", 0)
 
@@ -275,7 +176,7 @@ def spo2wellness(spo2):
     # pprint.pprint(wellness)
 
 
-def populateSpoList(api: Garmin):
+def populateSpoList(api: GarminClient):
     # start populating db/json
     reqday = startfrom
     db = sqlite3.connect("spo2.db3")
