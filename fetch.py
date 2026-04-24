@@ -170,6 +170,13 @@ def init_api() -> Garmin | None:
             garmin = Garmin(
                 email=email, password=password, is_cn=False
             )
+            garmin.garth.sess.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                )
+            })
             result1, result2 = garmin.login()
 
             if result1 == "needs_mfa":
