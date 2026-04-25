@@ -213,59 +213,24 @@ def populateHrvList(api: GarminClient):
     reqday = startfrom
     db = sqlite3.connect("hrv.db3")
     db.execute("""
-        CREATE TABLE IF NOT EXISTS hrv_summary (
-            date TEXT PRIMARY KEY,
-            last_night INTEGER,
-            high INTEGER,
-            low INTEGER,
-            weekly_avg INTEGER,
-            status TEXT
-        )
-    """)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS hrv_readings (
-            start_ts REAL PRIMARY KEY,
-            end_ts REAL,
-            hrv_5min_avg INTEGER,
-            hrv_5min_high INTEGER,
-            hrv_5min_low INTEGER
+        CREATE TABLE IF NOT EXISTS hrv (
+            "timestamp_utc" INTEGER NOT NULL UNIQUE,
+            "hrv_value" INTEGER NOT NULL,
+            PRIMARY KEY("timestamp_utc")
         )
     """)
     while reqday <= today:
         print("Querying HRV for: {}".format(reqday.isoformat()))
         success, data, error_msg = safe_api_call(_get_hrv_data, api, reqday.isoformat())
         if success and data:
-            summary = data.get("hrvSummary", {})
-            if summary:
-                db.execute(
-                    "INSERT OR REPLACE INTO hrv_summary VALUES (?, ?, ?, ?, ?, ?)",
-                    [
-                        reqday.isoformat(),
-                        summary.get("lastNight"),
-                        summary.get("highestHRV"),
-                        summary.get("lowestHRV"),
-                        summary.get("weeklyAvg"),
-                        summary.get("status"),
-                    ],
-                )
             readings = data.get("hrvReadings") or []
             for rec in readings:
                 start = rec.get("startTimestampGMT")
-                end = rec.get("endTimestampGMT")
-                if not start:
+                hrv_value = rec.get("hrv5MinAvg")
+                if not start or hrv_value is None:
                     continue
-                start_ts = datetime.datetime.fromisoformat(start).timestamp()
-                end_ts = datetime.datetime.fromisoformat(end).timestamp() if end else None
-                db.execute(
-                    "INSERT OR IGNORE INTO hrv_readings VALUES (?, ?, ?, ?, ?)",
-                    [
-                        start_ts,
-                        end_ts,
-                        rec.get("hrv5MinAvg"),
-                        rec.get("hrv5MinHigh"),
-                        rec.get("hrv5MinLow"),
-                    ],
-                )
+                ts = int(datetime.datetime.fromisoformat(start).timestamp())
+                db.execute("INSERT OR IGNORE INTO hrv VALUES (?, ?)", [ts, hrv_value])
             print("Got {} HRV readings.".format(len(readings)))
         else:
             if not success:
