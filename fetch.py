@@ -233,8 +233,8 @@ def populateHrvList(api: GarminClient):
         if success and data:
             readings = data.get("hrvReadings") or []
             for rec in readings:
-                start = rec.get("startTimestampGMT")
-                hrv_value = rec.get("hrv5MinAvg")
+                start = rec.get("readingTimeGMT")
+                hrv_value = rec.get("hrvValue")
                 if not start or hrv_value is None:
                     continue
                 ts = int(datetime.datetime.fromisoformat(start).timestamp())
