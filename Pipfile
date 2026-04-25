@@ -9,6 +9,7 @@ curl-cffi = "*"
 ua-generator = "*"
 intervals = "*"
 intervalsicu = "*"
+fitdecode = "*"
 
 [dev-packages]
 

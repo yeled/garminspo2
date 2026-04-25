@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import datetime
+import io
 import sqlite3
+import zipfile
 from pprint import pprint
 from time import sleep
 import logging
@@ -10,9 +12,12 @@ import os
 import sys
 from pathlib import Path
 
+import fitdecode
+
 from intervalsicu import Intervals
 
 from garmin_client import (
+    ActivityDownloadFormat,
     GarminClient,
     GarminAuthenticationError,
     GarminConnectionError,
@@ -248,6 +253,93 @@ def populateHrvList(api: GarminClient):
     db.close()
 
 
+def get_vo2max_from_fit(api: GarminClient):
+    """Download the latest activity FIT file from Garmin and return (vo2max, activity_date)."""
+    lookback = (today - datetime.timedelta(days=30)).isoformat()
+    success, activities, error_msg = safe_api_call(
+        api.get_activities_by_date, lookback, today.isoformat()
+    )
+    if not success or not activities:
+        print(f"Could not get recent activities: {error_msg}")
+        return None, None
+
+    last_activity = activities[-1]
+    activity_id = last_activity.get('activityId')
+    start_time = last_activity.get('startTimeLocal', '')
+    activity_date = datetime.date.fromisoformat(start_time[:10]) if start_time else today
+    print(f"Latest activity: {activity_id} on {activity_date}")
+
+    success, fit_zip_data, error_msg = safe_api_call(
+        api.download_activity, activity_id, ActivityDownloadFormat.ORIGINAL
+    )
+    if not success or not fit_zip_data:
+        print(f"Could not download FIT file: {error_msg}")
+        return None, activity_date
+
+    # ORIGINAL download is a zip; extract the .fit file
+    try:
+        with zipfile.ZipFile(io.BytesIO(fit_zip_data)) as zf:
+            fit_names = [n for n in zf.namelist() if n.lower().endswith('.fit')]
+            if not fit_names:
+                print("No .fit file found inside zip")
+                return None, activity_date
+            fit_bytes = zf.read(fit_names[0])
+            print(f"Extracted {fit_names[0]} ({len(fit_bytes)} bytes)")
+    except zipfile.BadZipFile:
+        fit_bytes = fit_zip_data
+
+    # Garmin stores the full-precision VO2max as a float in field def_num=7
+    # of the max_met_data message. The standard session.vo2_max_value is
+    # uint16 scale=10 and only encodes one decimal place, so we prefer the
+    # max_met_data path and fall back to session for older files.
+    vo2max = None
+    fallback_vo2max = None
+    try:
+        with fitdecode.FitReader(io.BytesIO(fit_bytes)) as fit:
+            for frame in fit:
+                if not isinstance(frame, fitdecode.FitDataMessage):
+                    continue
+
+                if frame.name == 'max_met_data':
+                    for field in frame.fields:
+                        if field.def_num == 7 and isinstance(field.value, (int, float)):
+                            val = float(field.value)
+                            if 20.0 <= val <= 100.0:
+                                vo2max = round(val, 4)
+                                print(f"VO2max from max_met_data field 7: {vo2max} mL/kg/min")
+                                break
+
+                elif frame.name == 'session' and frame.has_field('vo2_max_value'):
+                    val = frame.get_value('vo2_max_value')
+                    if val is not None and val > 0:
+                        fallback_vo2max = round(float(val), 1)
+
+                if vo2max is not None:
+                    break
+    except Exception as e:
+        print(f"Error parsing FIT file: {e}")
+
+    if vo2max is None and fallback_vo2max is not None:
+        vo2max = fallback_vo2max
+        print(f"VO2max from session.vo2_max_value (fallback): {vo2max} mL/kg/min")
+
+    if vo2max is None:
+        print("VO2max not found in FIT session record")
+
+    return vo2max, activity_date
+
+
+def vo2max_wellness(vo2max: float, activity_date: datetime.date = None):
+    """Push VO2max to Intervals.icu wellness for the given date."""
+    if activity_date is None:
+        activity_date = datetime.date.today()
+    svc = Intervals(ATHELETE_ID, API_KEY, strict=False)
+    wellness = svc.wellness(activity_date)
+    wellness['vo2max'] = vo2max
+    print(f"Sending VO2max: {vo2max} for {activity_date}")
+    svc.wellness_put(wellness)
+
+
 def main():
     """Initialize API with authentication (will only prompt for credentials if needed)"""
     api = init_api()
@@ -261,6 +353,12 @@ def main():
     spo2wellness(display_spo2(api))
     populateSpoList(api)
     populateHrvList(api)
+
+    vo2max, activity_date = get_vo2max_from_fit(api)
+    if vo2max is not None:
+        vo2max_wellness(vo2max, activity_date)
+    else:
+        print("VO2max not found in latest FIT file, skipping wellness update")
 
 
 if __name__ == "__main__":
