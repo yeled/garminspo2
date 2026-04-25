@@ -180,6 +180,14 @@ def populateSpoList(api: GarminClient):
     # start populating db/json
     reqday = startfrom
     db = sqlite3.connect("spo2.db3")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS "spo2" (
+            "timestamp_utc" INTEGER NOT NULL UNIQUE,
+            "spo2_percent"  INTEGER NOT NULL,
+            "spo2_confidence" INTEGER,
+            PRIMARY KEY("timestamp_utc")
+        )
+    """)
     while reqday <= today:
         print("Querying data for: {}".format(reqday.isoformat()))
         # reqday += datetime.timedelta(days=1)
@@ -193,7 +201,7 @@ def populateSpoList(api: GarminClient):
                ts = datetime.datetime.fromisoformat(rec["epochTimestamp"][:-2])   # strip hundreds of seconds
             #    print(ts, rec["spo2Reading"], rec["readingConfidence"])
                sql = "INSERT OR IGNORE INTO spo2 VALUES (?, ?, ?)"
-               db.execute(sql, [ts.timestamp(), rec["spo2Reading"], rec["readingConfidence"]])
+               db.execute(sql, [int(ts.timestamp()), rec["spo2Reading"], rec["readingConfidence"]])
             print("Got {} records.".format(len(sleep_wellness)))
         if not success:
             print(f"️Could not fetch daily stats: {error_msg}")
