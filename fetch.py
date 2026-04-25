@@ -128,7 +128,7 @@ def init_api() -> GarminClient | None:
 
 
 def _get_spo2_data(client: GarminClient, cdate: str) -> dict:
-    return client._connectapi(f"/wellness-service/wellness/dailySummary/spo2/{cdate}")
+    return client._connectapi(f"/wellness-service/wellness/daily/spo2/{cdate}")
 
 
 def display_spo2(api: GarminClient):
