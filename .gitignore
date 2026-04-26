@@ -1,2 +1,5 @@
 /auth.py
 /spo2.db3
+/hrv.db3
+/vo2max.db3
+__pycache__/
