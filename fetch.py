@@ -288,10 +288,17 @@ def get_vo2max_from_fit(api: GarminClient):
     except zipfile.BadZipFile:
         fit_bytes = fit_zip_data
 
-    # Garmin stores the full-precision VO2max as a float in field def_num=7
-    # of the max_met_data message. The standard session.vo2_max_value is
-    # uint16 scale=10 and only encodes one decimal place, so we prefer the
-    # max_met_data path and fall back to session for older files.
+    # Garmin encodes VO2max in two ways depending on the device/firmware:
+    #
+    # 1. mesg 140 (unknown_140) def_num=7: sint32 = METs × 65536, where
+    #    1 MET = 3.5 mL/kg/min. Full precision (e.g. 898327 → 47.9758).
+    #    def_num=29 holds the same value as "first vo2max" (both used).
+    #
+    # 2. max_met_data (mesg 229) def_num=7: float32 VO2max directly.
+    #    Present on some devices/firmware when Garmin computes a new estimate.
+    #
+    # 3. session.vo2_max_value: uint16 scale=10, only 1 decimal place.
+    #    Last-resort fallback for old files.
     vo2max = None
     fallback_vo2max = None
     try:
@@ -300,7 +307,20 @@ def get_vo2max_from_fit(api: GarminClient):
                 if not isinstance(frame, fitdecode.FitDataMessage):
                     continue
 
-                if frame.name == 'max_met_data':
+                # Primary: mesg 140 stores VO2max as METs × 65536 (sint32)
+                if frame.name == 'unknown_140':
+                    for field in frame.fields:
+                        if field.def_num == 7:
+                            raw = getattr(field, 'raw_value', field.value)
+                            if isinstance(raw, int) and raw > 0:
+                                val = raw * 3.5 / 65536
+                                if 20.0 <= val <= 100.0:
+                                    vo2max = round(val, 4)
+                                    print(f"VO2max from mesg 140 field 7: {vo2max} mL/kg/min")
+                                    break
+
+                # Secondary: max_met_data stores VO2max directly as float32
+                elif frame.name == 'max_met_data':
                     for field in frame.fields:
                         if field.def_num == 7 and isinstance(field.value, (int, float)):
                             val = float(field.value)
