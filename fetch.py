@@ -255,7 +255,7 @@ def populateHrvList(api: GarminClient):
 
 def get_vo2max_from_fit(api: GarminClient):
     """Download the latest activity FIT file from Garmin and return (vo2max, activity_date)."""
-    lookback = (today - datetime.timedelta(days=30)).isoformat()
+    lookback = (today - datetime.timedelta(days=7)).isoformat()
     success, activities, error_msg = safe_api_call(
         api.get_activities_by_date, lookback, today.isoformat()
     )
@@ -263,9 +263,10 @@ def get_vo2max_from_fit(api: GarminClient):
         print(f"Could not get recent activities: {error_msg}")
         return None, None
 
-    last_activity = activities[-1]
-    activity_id = last_activity.get('activityId')
-    start_time = last_activity.get('startTimeLocal', '')
+    # API returns newest-first
+    latest = activities[0]
+    activity_id = latest.get('activityId')
+    start_time = latest.get('startTimeLocal', '')
     activity_date = datetime.date.fromisoformat(start_time[:10]) if start_time else today
     print(f"Latest activity: {activity_id} on {activity_date}")
 
