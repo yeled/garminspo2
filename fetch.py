@@ -267,8 +267,9 @@ def get_vo2max_from_fit(api: GarminClient):
     latest = activities[0]
     activity_id = latest.get('activityId')
     start_time = latest.get('startTimeLocal', '')
-    activity_date = datetime.date.fromisoformat(start_time[:10]) if start_time else today
-    print(f"Latest activity: {activity_id} on {activity_date}")
+    activity_dt = datetime.datetime.fromisoformat(start_time) if start_time else datetime.datetime.combine(today, datetime.time())
+    activity_date = activity_dt.date()
+    print(f"Latest activity: {activity_id} on {activity_dt}")
 
     success, fit_zip_data, error_msg = safe_api_call(
         api.download_activity, activity_id, ActivityDownloadFormat.ORIGINAL
@@ -347,7 +348,24 @@ def get_vo2max_from_fit(api: GarminClient):
     if vo2max is None:
         print("VO2max not found in FIT session record")
 
-    return vo2max, activity_date
+    return vo2max, activity_dt
+
+
+def store_vo2max(activity_dt: datetime.datetime, vo2max: float):
+    """Insert VO2max reading into local sqlite DB, keyed by activity timestamp."""
+    db = sqlite3.connect("vo2max.db3")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS vo2max (
+            "timestamp_utc" INTEGER NOT NULL UNIQUE,
+            "vo2max" REAL NOT NULL,
+            PRIMARY KEY("timestamp_utc")
+        )
+    """)
+    ts = int(activity_dt.timestamp())
+    db.execute("INSERT OR IGNORE INTO vo2max VALUES (?, ?)", [ts, vo2max])
+    db.commit()
+    db.close()
+    print(f"Stored VO2max {vo2max} for {activity_dt}")
 
 
 def vo2max_wellness(vo2max: float, activity_date: datetime.date = None):
@@ -375,9 +393,10 @@ def main():
     populateSpoList(api)
     populateHrvList(api)
 
-    vo2max, activity_date = get_vo2max_from_fit(api)
+    vo2max, activity_dt = get_vo2max_from_fit(api)
     if vo2max is not None:
-        vo2max_wellness(vo2max, activity_date)
+        store_vo2max(activity_dt, vo2max)
+        vo2max_wellness(vo2max, activity_dt.date())
     else:
         print("VO2max not found in latest FIT file, skipping wellness update")
 
