@@ -1,0 +1,76 @@
+diff --git a/omramin.py b/omramin.py
+index 1a059fa..2983d0d 100755
+--- a/omramin.py
++++ b/omramin.py
+@@ -43,6 +43,7 @@ from dateutil import parser as dateutil_parser
+ from httpx import HTTPStatusError
+ 
+ import omronconnect as OC
++import sqlite_store as SS
+ import utils as U
+ 
+ ########################################################################################################################
+@@ -69,6 +70,7 @@ class Options:
+     write_to_garmin: bool = True
+     overwrite: bool = False
+     ble_filter: str = "BLEsmart_"
++    sqlite_dir: T.Optional[str] = None
+ 
+ 
+ @dataclasses.dataclass
+@@ -1147,6 +1149,12 @@ def omron_sync_device_to_garmin(
+         return
+ 
+     L.info(f"Downloaded {len(measurements)} entries from 'OMRON connect' for '{ocDev.name}'")
++
++    if opts.sqlite_dir is not None:
++        import os
++        os.makedirs(opts.sqlite_dir, exist_ok=True)
++        SS.store_measurements(opts.sqlite_dir, measurements)
++        L.info(f"Stored {len(measurements)} measurements to SQLite in '{opts.sqlite_dir}'")
+     first_ts = datetime.fromtimestamp(measurements[0].measurementDate / 1000).isoformat()
+     last_ts = datetime.fromtimestamp(measurements[-1].measurementDate / 1000).isoformat()
+     L.debug(f"Measurement date range: {first_ts} to {last_ts}")
+@@ -1912,6 +1920,14 @@ def remove_device(ctx: click.Context, devname: str):
+     show_default=True,
+     help="Do not write to Garmin Connect.",
+ )
++@click.option(
++    "--sqlite-dir",
++    type=click.Path(file_okay=False, writable=True),
++    default=None,
++    show_default=False,
++    envvar="OMRAMIN_SQLITE_DIR",
++    help="Directory to store SQLite measurement databases (blood_pressure.db3, weight.db3).",
++)
+ @click.pass_context
+ @requires_config
+ def sync_device(
+@@ -1923,6 +1939,7 @@ def sync_device(
+     to_date: T.Optional[str],
+     overwrite: bool,
+     no_write: bool,
++    sqlite_dir: T.Optional[str],
+ ):
+     """Sync DEVNAMES... to Garmin Connect.
+ 
+@@ -1967,6 +1984,7 @@ def sync_device(
+     opts = Options()
+     opts.overwrite = overwrite
+     opts.write_to_garmin = not no_write
++    opts.sqlite_dir = sqlite_dir
+ 
+     try:
+         config = U.json_load(config_path)
+diff --git a/pyproject.toml b/pyproject.toml
+index 3ea635e..64ef405 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -66,6 +66,7 @@ include-package-data = true
+ py-modules = [
+   "omramin",
+   "omronconnect",
++  "sqlite_store",
+   "utils",
+   "regionserver",
+   "httpxlogtransport",
