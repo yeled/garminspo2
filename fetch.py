@@ -295,7 +295,8 @@ def get_vo2max_from_fit(api: GarminClient):
     activity_dt = datetime.datetime.fromisoformat(start_time) if start_time else datetime.datetime.combine(today, datetime.time())
     activity_date = activity_dt.date()
     type_key = (latest.get('activityType') or {}).get('typeKey', '')
-    print(f"Latest outdoor run: {activity_id} ({type_key}) on {activity_dt}")
+    activity_name = latest.get('activityName') or '(unnamed)'
+    print(f"Latest outdoor run: {activity_name} [{activity_id}] ({type_key}) on {activity_dt}")
 
     success, fit_zip_data, error_msg = safe_api_call(
         api.download_activity, activity_id, ActivityDownloadFormat.ORIGINAL
@@ -312,7 +313,7 @@ def get_vo2max_from_fit(api: GarminClient):
                 print("No .fit file found inside zip")
                 return None, activity_date
             fit_bytes = zf.read(fit_names[0])
-            print(f"Extracted {fit_names[0]} ({len(fit_bytes)} bytes)")
+            print(f"Extracted {activity_name} ({len(fit_bytes)} bytes)")
     except zipfile.BadZipFile:
         fit_bytes = fit_zip_data
 
