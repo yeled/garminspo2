@@ -253,9 +253,23 @@ def populateHrvList(api: GarminClient):
     db.close()
 
 
+OUTDOOR_RUN_TYPES = {
+    "running",
+    "street_running",
+    "trail_running",
+    "track_running",
+    "ultra_run",
+}
+
+
 def get_vo2max_from_fit(api: GarminClient):
-    """Download the latest activity FIT file from Garmin and return (vo2max, activity_date)."""
-    lookback = (today - datetime.timedelta(days=7)).isoformat()
+    """Download the latest outdoor run FIT file from Garmin and return (vo2max, activity_date).
+
+    Cycling VO2max is ignored — running is the athlete's primary sport, so only
+    outdoor runs are considered. Treadmill/indoor runs are skipped since Garmin
+    does not produce a reliable VO2max from them.
+    """
+    lookback = (today - datetime.timedelta(days=14)).isoformat()
     success, activities, error_msg = safe_api_call(
         api.get_activities_by_date, lookback, today.isoformat()
     )
@@ -263,13 +277,25 @@ def get_vo2max_from_fit(api: GarminClient):
         print(f"Could not get recent activities: {error_msg}")
         return None, None
 
-    # API returns newest-first
-    latest = activities[0]
+    # API returns newest-first; pick the most recent outdoor run.
+    latest = None
+    for act in activities:
+        type_key = (act.get('activityType') or {}).get('typeKey', '')
+        if type_key in OUTDOOR_RUN_TYPES:
+            latest = act
+            break
+        print(f"Skipping activity {act.get('activityId')} ({type_key}) — not an outdoor run")
+
+    if latest is None:
+        print("No recent outdoor run found in lookback window")
+        return None, None
+
     activity_id = latest.get('activityId')
     start_time = latest.get('startTimeLocal', '')
     activity_dt = datetime.datetime.fromisoformat(start_time) if start_time else datetime.datetime.combine(today, datetime.time())
     activity_date = activity_dt.date()
-    print(f"Latest activity: {activity_id} on {activity_dt}")
+    type_key = (latest.get('activityType') or {}).get('typeKey', '')
+    print(f"Latest outdoor run: {activity_id} ({type_key}) on {activity_dt}")
 
     success, fit_zip_data, error_msg = safe_api_call(
         api.download_activity, activity_id, ActivityDownloadFormat.ORIGINAL
