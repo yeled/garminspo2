@@ -275,7 +275,7 @@ def get_vo2max_from_fit(api: GarminClient):
     )
     if not success or not activities:
         print(f"Could not get recent activities: {error_msg}")
-        return None, None
+        return None, None, None
 
     # API returns newest-first; pick the most recent outdoor run.
     latest = None
@@ -288,12 +288,18 @@ def get_vo2max_from_fit(api: GarminClient):
 
     if latest is None:
         print("No recent outdoor run found in lookback window")
-        return None, None
+        return None, None, None
 
     activity_id = latest.get('activityId')
     start_time = latest.get('startTimeLocal', '')
     activity_dt = datetime.datetime.fromisoformat(start_time) if start_time else datetime.datetime.combine(today, datetime.time())
     activity_date = activity_dt.date()
+    # startTimeLocal is naive wall-clock; use startTimeGMT for a true UTC timestamp.
+    start_gmt = latest.get('startTimeGMT', '')
+    activity_dt_utc = (
+        datetime.datetime.fromisoformat(start_gmt).replace(tzinfo=datetime.timezone.utc)
+        if start_gmt else activity_dt.replace(tzinfo=datetime.timezone.utc)
+    )
     type_key = (latest.get('activityType') or {}).get('typeKey', '')
     activity_name = latest.get('activityName') or '(unnamed)'
     print(f"Latest outdoor run: {activity_name} [{activity_id}] ({type_key}) on {activity_dt}")
@@ -303,7 +309,7 @@ def get_vo2max_from_fit(api: GarminClient):
     )
     if not success or not fit_zip_data:
         print(f"Could not download FIT file: {error_msg}")
-        return None, activity_date
+        return None, activity_date, activity_dt_utc
 
     # ORIGINAL download is a zip; extract the .fit file
     try:
@@ -311,7 +317,7 @@ def get_vo2max_from_fit(api: GarminClient):
             fit_names = [n for n in zf.namelist() if n.lower().endswith('.fit')]
             if not fit_names:
                 print("No .fit file found inside zip")
-                return None, activity_date
+                return None, activity_date, activity_dt_utc
             fit_bytes = zf.read(fit_names[0])
             print(f"Extracted {activity_name} ({len(fit_bytes)} bytes)")
     except zipfile.BadZipFile:
@@ -375,11 +381,11 @@ def get_vo2max_from_fit(api: GarminClient):
     if vo2max is None:
         print("VO2max not found in FIT session record")
 
-    return vo2max, activity_dt
+    return vo2max, activity_dt, activity_dt_utc
 
 
 def store_vo2max(activity_dt: datetime.datetime, vo2max: float):
-    """Insert VO2max reading into local sqlite DB, keyed by activity timestamp."""
+    """Insert VO2max reading into local sqlite DB, keyed by activity UTC timestamp (activity_dt must be tz-aware)."""
     db = sqlite3.connect("vo2max.db3")
     db.execute("""
         CREATE TABLE IF NOT EXISTS vo2max (
@@ -420,9 +426,9 @@ def main():
     populateSpoList(api)
     populateHrvList(api)
 
-    vo2max, activity_dt = get_vo2max_from_fit(api)
+    vo2max, activity_dt, activity_dt_utc = get_vo2max_from_fit(api)
     if vo2max is not None:
-        store_vo2max(activity_dt, vo2max)
+        store_vo2max(activity_dt_utc, vo2max)
         vo2max_wellness(vo2max, activity_dt.date())
     else:
         print("VO2max not found in latest FIT file, skipping wellness update")
